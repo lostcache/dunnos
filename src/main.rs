@@ -1,8 +1,10 @@
 #![no_std]
 #![no_main]
+#![feature(sync_unsafe_cell)]
 
 use core::arch::global_asm;
 use core::panic::PanicInfo;
+
 mod uart;
 
 global_asm!(
@@ -31,5 +33,11 @@ fn panic(_: &PanicInfo) -> ! {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn start() -> ! {
-    loop {}
+    uart::init();
+    loop {
+        uart::handle_interrupt();
+        if let Some(byte) = uart::pop_byte() {
+            uart::send_byte(byte);
+        }
+    }
 }
