@@ -1,6 +1,7 @@
 use core::cell::SyncUnsafeCell;
 
 // qemu specific address
+pub(crate) const IRQ: u32 = 10;
 const UART0: u32 = 0x1000_0000;
 
 // the UART control registers.

@@ -5,6 +5,7 @@
 use core::arch::global_asm;
 use core::panic::PanicInfo;
 
+mod plic;
 mod uart;
 
 global_asm!(
