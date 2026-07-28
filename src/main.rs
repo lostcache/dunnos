@@ -5,6 +5,7 @@
 use core::arch::global_asm;
 use core::panic::PanicInfo;
 
+mod kerneltrapvec;
 mod plic;
 mod uart;
 
@@ -35,6 +36,10 @@ fn panic(_: &PanicInfo) -> ! {
 #[unsafe(no_mangle)]
 pub extern "C" fn start() -> ! {
     uart::init();
+    plic::init();
+    unsafe {
+        kerneltrapvec::kernel_trap_init();
+    }
     loop {
         uart::handle_interrupt();
         if let Some(byte) = uart::pop_byte() {
