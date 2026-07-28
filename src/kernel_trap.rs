@@ -1,8 +1,8 @@
 use core::arch::{asm, global_asm};
 
-unsafe extern "C" {
-    pub(crate) fn _kerneltrapvec();
-}
+use crate::{plic, uart};
+
+const MACHINE_EXTERNAL_INTERRUPT_CODE: usize = 11;
 
 pub(crate) unsafe fn kernel_trap_init() {
     unsafe {
@@ -10,6 +10,31 @@ pub(crate) unsafe fn kernel_trap_init() {
         asm!("li {0}, 1 << 11", "csrs mie, {0}", out(reg) _);
         asm!("csrs mstatus, {0}", in(reg) 1usize << 3);
     }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn kerneltrap() {
+    let cause: usize;
+    unsafe {
+        asm!("csrr {0}, mcause", out(reg) cause);
+    }
+    let is_interrupt = cause >> 63 != 0;
+    let code = cause & 0xff;
+    if is_interrupt && code == MACHINE_EXTERNAL_INTERRUPT_CODE {
+        let irq = plic::claim();
+        if irq == uart::IRQ {
+            uart::handle_interrupt();
+        }
+        if irq != 0 {
+            plic::complete(irq);
+        }
+    } else {
+        loop {}
+    }
+}
+
+unsafe extern "C" {
+    pub(crate) fn _kerneltrapvec();
 }
 
 // x0 is hardwired to zero, x2 (sp) is restored arithmetically.
@@ -49,6 +74,8 @@ _kerneltrapvec:
     sd x29, 224(sp)
     sd x30, 232(sp)
     sd x31, 240(sp)
+
+    call kerneltrap
 
     ld x1, 0(sp)
     ld x3, 16(sp)

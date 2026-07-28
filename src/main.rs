@@ -2,10 +2,10 @@
 #![no_main]
 #![feature(sync_unsafe_cell)]
 
-use core::arch::global_asm;
+use core::arch::{asm, global_asm};
 use core::panic::PanicInfo;
 
-mod kerneltrapvec;
+mod kernel_trap;
 mod plic;
 mod uart;
 
@@ -38,12 +38,14 @@ pub extern "C" fn start() -> ! {
     uart::init();
     plic::init();
     unsafe {
-        kerneltrapvec::kernel_trap_init();
+        kernel_trap::kernel_trap_init();
     }
     loop {
-        uart::handle_interrupt();
-        if let Some(byte) = uart::pop_byte() {
-            uart::send_byte(byte);
+        match uart::pop_byte() {
+            Some(byte) => uart::send_byte(byte),
+            None => unsafe {
+                asm!("wfi");
+            },
         }
     }
 }
