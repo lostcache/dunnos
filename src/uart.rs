@@ -77,6 +77,7 @@ fn set_baude_rate() {
     set_dlab_bit();
     write_reg(DIVISOR_LATCH_LS_ADDR, 3);
     write_reg(DIVISOR_LATCH_MS_ADDR, 0);
+    unset_dlab_bit();
 }
 
 fn push_byte(val: u8) -> Result<(), IOError> {
@@ -114,7 +115,13 @@ fn set_line_control_register_for_transmission_and_reception() {
 }
 
 fn set_dlab_bit() {
-    write_reg(LINE_CONTROL_REGISTER_ADDR, 1 << 7);
+    let lcr_val: u8 = read_reg(LINE_CONTROL_REGISTER_ADDR);
+    write_reg(LINE_CONTROL_REGISTER_ADDR, lcr_val | (1 << 7));
+}
+
+fn unset_dlab_bit() {
+    let lcr_val: u8 = read_reg(LINE_CONTROL_REGISTER_ADDR);
+    write_reg(LINE_CONTROL_REGISTER_ADDR, lcr_val & !(1 << 7));
 }
 
 fn read_reg(reg_addr: u8) -> u8 {
@@ -136,6 +143,7 @@ fn init_interrtup_enable_register() {
     const RECEIVED_DATA_AVAILABLE_INTERRUPT: u8 = 1 << 0;
     const TRANSMITTER_HOLDING_REGISTER_EMPTY_INTERRUPT: u8 = 0 << 1; // The holding register is empty almost always. The interrupt would fire without end.
     const REVEIVER_LINE_STAATUS_INTERRUPT: u8 = 1 << 2;
+    unset_dlab_bit();
     write_reg(
         INTERRUPT_ENABLE_REGISTER_ADDR,
         RECEIVED_DATA_AVAILABLE_INTERRUPT
