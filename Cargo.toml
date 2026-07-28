@@ -9,3 +9,8 @@ opt-level = 1
 
 [profile.release]
 panic = "abort"
+
+[lints.clippy]
+all = "deny"          # Deny all lints by default
+pedantic = "warn"     # Warn for pedantic lints
+nursery = "allow"     # Allow nursery lints (new and experimental)

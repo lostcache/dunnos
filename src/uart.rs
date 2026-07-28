@@ -33,15 +33,14 @@ pub(crate) fn handle_interrupt() {
         }
         RECEIVER_DATA_AVAILABLE_INTERRUPT => {
             match push_byte(read_byte()) {
-                Err(IOError::BufferOverflow) => {
-                    // drops the byte
+                Err(IOError::BufferOverflow) | Ok(()) => {
+                    // drops the byte if buffer overflows
                 }
-                Ok(_) => {}
-            };
+            }
         }
         RECEIVER_TRANSMITTER_HOLDING_EMPTY_INTERRUPT => {}
         _ => (),
-    };
+    }
 }
 
 pub(crate) fn pop_byte() -> Option<u8> {
@@ -119,9 +118,7 @@ fn set_dlab_bit() {
 }
 
 fn read_reg(reg_addr: u8) -> u8 {
-    unsafe {
-        return core::ptr::read_volatile(get_mem_addr(reg_addr) as *mut u8);
-    }
+    unsafe { core::ptr::read_volatile(get_mem_addr(reg_addr) as *mut u8) }
 }
 
 fn write_reg(reg_addr: u8, val: u8) {
@@ -131,7 +128,7 @@ fn write_reg(reg_addr: u8, val: u8) {
 }
 
 fn get_mem_addr(offset: u8) -> u32 {
-    UART0 + offset as u32
+    UART0 + u32::from(offset)
 }
 
 fn init_interrtup_enable_register() {
