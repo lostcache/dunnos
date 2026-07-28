@@ -16,17 +16,14 @@ const PLIC_REGISTER_SIZE_BYTES: u32 = 4;
 
 pub(crate) fn init() {
     unsafe {
-        // set priority
         write_volatile(
             (get_abs_addr(PRIORITY_OFFSET) + PLIC_REGISTER_SIZE_BYTES * uart::IRQ) as *mut u32,
             1,
         );
-        // set enable bit
         write_volatile(
             (get_abs_addr(ENABLE_OFFSET) + ENABLE_BYTES_PER_CTX * m_mode_ctx(0)) as *mut u32,
             1 << uart::IRQ,
         );
-        // set threshold bit
         write_volatile(
             (get_abs_addr(THRESHOLD_OFFSET) + PAGE_SIZE_PER_CTX * m_mode_ctx(0)) as *mut u32,
             0,
