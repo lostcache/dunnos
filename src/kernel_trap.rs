@@ -4,14 +4,6 @@ use crate::{plic, uart};
 
 const MACHINE_EXTERNAL_INTERRUPT_CODE: usize = 11;
 
-pub(crate) unsafe fn kernel_trap_init() {
-    unsafe {
-        asm!("csrw mtvec, {0}", in(reg) _kerneltrapvec as *const () as usize);
-        asm!("li {0}, 1 << 11", "csrs mie, {0}", out(reg) _);
-        asm!("csrs mstatus, {0}", in(reg) 1usize << 3);
-    }
-}
-
 #[unsafe(no_mangle)]
 extern "C" fn kerneltrap() {
     let cause: usize;
@@ -110,6 +102,6 @@ _kerneltrapvec:
 
     addi sp, sp, 256
 
-    mret
+    sret
     "#
 );

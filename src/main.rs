@@ -33,13 +33,7 @@ fn panic(_: &PanicInfo) -> ! {
     loop {}
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn start() -> ! {
-    uart::init();
-    plic::init();
-    unsafe {
-        kernel_trap::kernel_trap_init();
-    }
+fn main() {
     loop {
         match uart::pop_byte() {
             Some(byte) => uart::send_byte(byte),
@@ -48,4 +42,45 @@ pub extern "C" fn start() -> ! {
             },
         }
     }
+}
+
+fn timer_init() {}
+
+fn handover_to_s_mode() {
+    unsafe {
+        // trap routine
+        asm!("csrw medeleg, {0}", in(reg) 0xffffusize);
+        asm!("csrw mideleg, {0}", in(reg) 0xffffusize);
+
+        // memory access for s mode
+        asm!("csrw pmpaddr0, {0}", in(reg) 0x3f_ffff_ffff_ffffusize);
+        asm!("csrw pmpcfg0, {0}", in(reg) 0xfusize);
+
+        // paging
+        asm!("csrw satp, 0");
+
+        // handoff target
+        asm!("csrw mepc, {0}", in(reg) main as *const () as usize);
+
+        // drop to s mode after mret
+        asm!("csrc mstatus, {0}", in(reg) 3usize << 11);
+        asm!("csrs mstatus, {0}", in(reg) 1usize << 11);
+
+        // context handover
+        asm!("csrr tp, mhartid");
+
+        // timer
+        timer_init();
+
+        // perform the drop, hint to rust compiler that main never returns
+        asm!("mret", options(noreturn));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn start() {
+    uart::init();
+    plic::init();
+
+    handover_to_s_mode();
 }

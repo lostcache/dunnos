@@ -21,11 +21,11 @@ pub(crate) fn init() {
             1,
         );
         write_volatile(
-            (get_abs_addr(ENABLE_OFFSET) + ENABLE_BYTES_PER_CTX * m_mode_ctx(0)) as *mut u32,
+            (get_abs_addr(ENABLE_OFFSET) + ENABLE_BYTES_PER_CTX * s_mode_ctx(0)) as *mut u32,
             1 << uart::IRQ,
         );
         write_volatile(
-            (get_abs_addr(THRESHOLD_OFFSET) + PAGE_SIZE_PER_CTX * m_mode_ctx(0)) as *mut u32,
+            (get_abs_addr(THRESHOLD_OFFSET) + PAGE_SIZE_PER_CTX * s_mode_ctx(0)) as *mut u32,
             0,
         );
     }
@@ -34,7 +34,7 @@ pub(crate) fn init() {
 pub(crate) fn claim() -> u32 {
     unsafe {
         read_volatile(
-            (get_abs_addr(CLAIM_OFFSET) + PAGE_SIZE_PER_CTX * m_mode_ctx(0)) as *const u32,
+            (get_abs_addr(CLAIM_OFFSET) + PAGE_SIZE_PER_CTX * s_mode_ctx(0)) as *const u32,
         )
     }
 }
@@ -42,7 +42,7 @@ pub(crate) fn claim() -> u32 {
 pub(crate) fn complete(irq: u32) {
     unsafe {
         write_volatile(
-            (get_abs_addr(CLAIM_OFFSET) + PAGE_SIZE_PER_CTX * m_mode_ctx(0)) as *mut u32,
+            (get_abs_addr(CLAIM_OFFSET) + PAGE_SIZE_PER_CTX * s_mode_ctx(0)) as *mut u32,
             irq,
         );
     }
@@ -54,4 +54,8 @@ fn get_abs_addr(offset: u32) -> u32 {
 
 fn m_mode_ctx(hart_id: u32) -> u32 {
     2 * hart_id
+}
+
+fn s_mode_ctx(hart_id: u32) -> u32 {
+    2 * hart_id + 1
 }
