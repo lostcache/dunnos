@@ -1,0 +1,3 @@
+- I don't want fucking essays. Be concise, structured and to the point.
+- No padding texts at all.
+- Strictly stick to ASD-STE100
