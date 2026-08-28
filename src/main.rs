@@ -6,6 +6,7 @@ use core::arch::{asm, global_asm};
 use core::panic::PanicInfo;
 
 mod kernel_trap;
+use kernel_trap::_kerneltrapvec;
 mod plic;
 mod uart;
 
@@ -34,6 +35,9 @@ fn panic(_: &PanicInfo) -> ! {
 }
 
 fn main() {
+    unsafe {
+        asm!("csrs sstatus, {0}", in(reg) 1usize << 1); // SIE: take interrupts in S-mode
+    }
     loop {
         match uart::pop_byte() {
             Some(byte) => uart::send_byte(byte),
@@ -51,6 +55,10 @@ fn handover_to_s_mode() {
         // trap routine
         asm!("csrw medeleg, {0}", in(reg) 0xffffusize);
         asm!("csrw mideleg, {0}", in(reg) 0xffffusize);
+
+        // S-mode trap vector and external interrupt enables
+        asm!("csrw stvec, {0}", in(reg) _kerneltrapvec as *const () as usize);
+        asm!("csrs sie, {0}", in(reg) 1usize << 9); // SEIE: supervisor external interrupts
 
         // memory access for s mode
         asm!("csrw pmpaddr0, {0}", in(reg) 0x3f_ffff_ffff_ffffusize);

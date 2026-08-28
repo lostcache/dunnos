@@ -2,17 +2,17 @@ use core::arch::{asm, global_asm};
 
 use crate::{plic, uart};
 
-const MACHINE_EXTERNAL_INTERRUPT_CODE: usize = 11;
+const SUPERVISOR_EXTERNAL_INTERRUPT_CODE: usize = 9;
 
 #[unsafe(no_mangle)]
 extern "C" fn kerneltrap() {
     let cause: usize;
     unsafe {
-        asm!("csrr {0}, mcause", out(reg) cause);
+        asm!("csrr {0}, scause", out(reg) cause);
     }
     let is_interrupt = cause >> 63 != 0;
     let code = cause & 0xff;
-    if is_interrupt && code == MACHINE_EXTERNAL_INTERRUPT_CODE {
+    if is_interrupt && code == SUPERVISOR_EXTERNAL_INTERRUPT_CODE {
         let irq = plic::claim();
         if irq == uart::IRQ {
             uart::handle_interrupt();
