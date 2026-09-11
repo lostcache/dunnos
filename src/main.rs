@@ -6,8 +6,8 @@ use core::arch::{asm, global_asm};
 use core::panic::PanicInfo;
 
 mod kernel_trap;
-use kernel_trap::_kerneltrapvec;
 mod plic;
+mod timer_interrupt;
 mod uart;
 
 global_asm!(
@@ -48,8 +48,6 @@ fn main() {
     }
 }
 
-fn timer_init() {}
-
 fn handover_to_s_mode() {
     unsafe {
         // trap routine
@@ -57,7 +55,7 @@ fn handover_to_s_mode() {
         asm!("csrw mideleg, {0}", in(reg) 0xffffusize);
 
         // S-mode trap vector and external interrupt enables
-        asm!("csrw stvec, {0}", in(reg) _kerneltrapvec as *const () as usize);
+        asm!("csrw stvec, {0}", in(reg) kernel_trap::_kerneltrapvec as *const () as usize);
         asm!("csrs sie, {0}", in(reg) 1usize << 9); // SEIE: supervisor external interrupts
 
         // memory access for s mode
@@ -78,7 +76,7 @@ fn handover_to_s_mode() {
         asm!("csrr tp, mhartid");
 
         // timer
-        timer_init();
+        timer_interrupt::timer_init();
 
         // perform the drop, hint to rust compiler that main never returns
         asm!("mret", options(noreturn));

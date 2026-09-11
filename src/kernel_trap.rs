@@ -1,8 +1,9 @@
 use core::arch::{asm, global_asm};
 
-use crate::{plic, uart};
+use crate::{plic, timer_interrupt, uart};
 
 const SUPERVISOR_EXTERNAL_INTERRUPT_CODE: usize = 9;
+const TIMER_INTERRUPT: usize = 5;
 
 #[unsafe(no_mangle)]
 extern "C" fn kerneltrap() {
@@ -12,13 +13,19 @@ extern "C" fn kerneltrap() {
     }
     let is_interrupt = cause >> 63 != 0;
     let code = cause & 0xff;
-    if is_interrupt && code == SUPERVISOR_EXTERNAL_INTERRUPT_CODE {
-        let irq = plic::claim();
-        if irq == uart::IRQ {
-            uart::handle_interrupt();
-        }
-        if irq != 0 {
-            plic::complete(irq);
+    if is_interrupt {
+        match code {
+            SUPERVISOR_EXTERNAL_INTERRUPT_CODE => {
+                let irq = plic::claim();
+                if irq == uart::IRQ {
+                    uart::handle_interrupt();
+                }
+                if irq != 0 {
+                    plic::complete(irq);
+                }
+            }
+            TIMER_INTERRUPT => timer_interrupt::handle_timer_interrupt(),
+            _ => loop {},
         }
     } else {
         loop {}
