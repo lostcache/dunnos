@@ -34,5 +34,5 @@ SECTIONS
     . = ALIGN(16);
   }
 
-  PROVIDE(end = .);          /* kalloc will need this later */
+  PROVIDE(end = .);
 }

@@ -5,10 +5,17 @@
 use core::arch::{asm, global_asm};
 use core::panic::PanicInfo;
 
+mod fdt;
 mod kernel_trap;
 mod plic;
 mod timer_interrupt;
 mod uart;
+mod utils;
+
+// Written by _entry asm (bootloader's a1 = DTB address). #[used]: asm-only reference must survive GC.
+#[used]
+#[unsafe(no_mangle)]
+pub(crate) static mut dtb_ptr: usize = 0;
 
 global_asm!(
     r#"
@@ -25,6 +32,10 @@ _entry:
     addi a0, a0, 1
     slli a0, a0, 12
     add  sp, sp, a0          // sp = stack0 + (hartid+1)*4KB
+
+    la   t0, dtb_ptr
+    sd   a1, 0(t0)
+
     call start
 "#
 );
@@ -86,6 +97,46 @@ fn handover_to_s_mode() {
 #[unsafe(no_mangle)]
 pub extern "C" fn start() {
     uart::init();
+    let fdt_result = fdt::probe();
+
+    match fdt_result {
+        Ok(()) => {
+            uart::send_byte(b'F');
+            let uart_ok = fdt::find_compatible(b"ns16550a")
+                .and_then(|id| fdt::reg(id, 0))
+                .is_some_and(|r| r.base == 0x1000_0000);
+            let plic_ok = fdt::find_compatible(b"riscv,plic0")
+                .and_then(|id| fdt::reg(id, 0))
+                .is_some_and(|r| r.base == 0x0c00_0000);
+            uart::send_byte(if uart_ok && plic_ok { b'+' } else { b'-' });
+        }
+        Err(e) => uart::send_byte(match e {
+            fdt::FdtError::NoDtb => b'D',
+            fdt::FdtError::BadHeader => b'H',
+            fdt::FdtError::BadStructure => b'S',
+            fdt::FdtError::ArenaFull => b'A',
+        }),
+    }
+
+    // match fdt_result {
+    //     Ok(()) => {
+    //         uart::send_byte(b'F');
+    //         let uart_ok = fdt::find_compatible(b"ns16550a")
+    //             .and_then(|id| fdt::reg(id, 0))
+    //             .is_some_and(|r| r.base == 0x1000_0000);
+    //         let plic_ok = fdt::find_compatible(b"riscv,plic0")
+    //             .and_then(|id| fdt::reg(id, 0))
+    //             .is_some_and(|r| r.base == 0x0c00_0000);
+    //         uart::send_byte(if uart_ok && plic_ok { b'+' } else { b'-' });
+    //     }
+    //      Err(e) => uart::send_byte(match e {
+    //                       fdt::FdtError::NoDtb => b'D',
+    //                       fdt::FdtError::BadHeader => b'H',
+    //                       fdt::FdtError::BadStructure => b'S',
+    //                       fdt::FdtError::ArenaFull => b'A',
+    //                   }),
+    // }
+
     plic::init();
 
     handover_to_s_mode();
