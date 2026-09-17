@@ -1,8 +1,10 @@
 use core::cell::SyncUnsafeCell;
 
-// qemu specific address
-pub(crate) const IRQ: u32 = 10;
-const UART0: u32 = 0x1000_0000;
+use crate::fdt;
+
+static UART_BASE: SyncUnsafeCell<usize> = SyncUnsafeCell::new(0);
+static UART_IRQ: SyncUnsafeCell<u32> = SyncUnsafeCell::new(0);
+static UART_FOUND: SyncUnsafeCell<bool> = SyncUnsafeCell::new(false);
 
 // the UART control registers.
 // see http://byterunner.com/16550.html
@@ -15,16 +17,47 @@ const INTERRUPT_IDENTIFIER_REGISTER_ADDR: u8 = 2;
 const IO_BUFFER_SIZE: usize = 128;
 const LINE_STATUS_REGISTER_ADDR: u8 = 5;
 
-pub(crate) fn init() {
+pub(crate) enum UARTInitError {
+    NoResources,
+    BadResources,
+    NoIrq,
+}
+
+pub(crate) fn init(node_idx: usize) -> Result<(), UARTInitError> {
+    let resource = fdt::get_resource(node_idx, 0).ok_or(UARTInitError::NoResources)?;
+    if resource.size == 0 {
+        return Err(UARTInitError::BadResources);
+    }
+    let irq = fdt::get_node_interrupt_by_idx(node_idx, 0).ok_or(UARTInitError::NoIrq)?;
+    let base = usize::try_from(resource.base).map_err(|_| UARTInitError::BadResources)?;
+    unsafe {
+        *UART_BASE.get() = base;
+        *UART_IRQ.get() = irq;
+    }
     set_baude_rate();
     init_interrtup_enable_register();
     set_line_control_register_for_transmission_and_reception();
+    unsafe {
+        *UART_FOUND.get() = true;
+    }
+    Ok(())
+}
+
+pub(crate) fn irq() -> u32 {
+    unsafe { *UART_IRQ.get() }
+}
+
+pub(crate) fn present() -> bool {
+    unsafe { *UART_FOUND.get() }
 }
 
 pub(crate) fn handle_interrupt() {
     const RECEIVER_LINE_STATUS_INTERRUPT: u8 = (1 << 2) | (1 << 1);
     const RECEIVER_DATA_AVAILABLE_INTERRUPT: u8 = 1 << 2;
     const RECEIVER_TRANSMITTER_HOLDING_EMPTY_INTERRUPT: u8 = 1 << 1;
+    if !present() {
+        return;
+    }
     let interrupt_identity_register_val = read_reg(INTERRUPT_IDENTIFIER_REGISTER_ADDR);
     match interrupt_identity_register_val & 0x0F {
         RECEIVER_LINE_STATUS_INTERRUPT => {
@@ -44,6 +77,9 @@ pub(crate) fn handle_interrupt() {
 }
 
 pub(crate) fn pop_byte() -> Option<u8> {
+    if !present() {
+        return None;
+    }
     let buf = unsafe { &mut *IO_BUFFER.get() };
     if buf.read == buf.write {
         return None;
@@ -54,6 +90,9 @@ pub(crate) fn pop_byte() -> Option<u8> {
 }
 
 pub(crate) fn send_byte(val: u8) {
+    if !present() {
+        return;
+    }
     write_reg(TRANSMITTER_HOLDING_REGISTER_ADDR, val);
 }
 
@@ -134,8 +173,12 @@ fn write_reg(reg_addr: u8, val: u8) {
     }
 }
 
-fn get_mem_addr(offset: u8) -> u32 {
-    UART0 + u32::from(offset)
+fn get_mem_addr(offset: u8) -> usize {
+    base() + usize::from(offset)
+}
+
+fn base() -> usize {
+    unsafe { *UART_BASE.get() }
 }
 
 fn init_interrtup_enable_register() {

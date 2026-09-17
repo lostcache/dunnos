@@ -29,9 +29,9 @@ struct FdtBlocks {
 pub(crate) fn probe() -> Result<(), FdtError> {
     let fdt_base = unsafe { crate::dtb_ptr };
     let blocks = parse_header(fdt_base)?;
-    let count = count(&blocks)?;
-    init_arena(&count)?;
-    build(&blocks)?;
+    let counts = count(&blocks)?;
+    init_arena(&counts)?;
+    parse_dt(&blocks)?;
     Ok(())
 }
 
@@ -119,7 +119,7 @@ fn count(b: &FdtBlocks) -> Result<Counts, FdtError> {
         match token {
             FDT_BEGIN_NODE => {
                 depth += 1;
-                if depth >= MAX_CLOSED_DEPTH as i32 {
+                if depth >= MAX_CLOSED_DEPTH.cast_signed() {
                     return Err(FdtError::BadStructure);
                 }
 
@@ -127,7 +127,7 @@ fn count(b: &FdtBlocks) -> Result<Counts, FdtError> {
                 else {
                     return Err(FdtError::BadStructure);
                 };
-                cursor = utils::align4(cursor + name.len() + 1); // why + 1?
+                cursor = utils::align4(cursor + name.len() + 1); // + 1 for the NUL terminator
                 if cursor > struct_end {
                     return Err(FdtError::BadStructure);
                 }
@@ -136,7 +136,7 @@ fn count(b: &FdtBlocks) -> Result<Counts, FdtError> {
                     closed |= 1 << (depth - 1);
                 }
                 node_count = node_count.checked_add(1).ok_or(FdtError::BadStructure)?;
-                max_depth = max(max_depth, (depth + 1) as u32);
+                max_depth = max(max_depth, (depth + 1).cast_unsigned());
             }
             FDT_PROP => {
                 if depth < 0 || closed & (1 << depth) != 0 {
@@ -209,7 +209,7 @@ fn count(b: &FdtBlocks) -> Result<Counts, FdtError> {
     })
 }
 
-fn build(b: &FdtBlocks) -> Result<(), FdtError> {
+fn parse_dt(b: &FdtBlocks) -> Result<(), FdtError> {
     let arena = get_mut_arena();
 
     let mut cursor = b.struct_base;
@@ -266,18 +266,14 @@ fn build(b: &FdtBlocks) -> Result<(), FdtError> {
                 ) else {
                     return Err(FdtError::BadStructure);
                 };
-                let prop_str_slice =
-                    unsafe { core::slice::from_raw_parts(cursor as *const u8, len) };
+                let value = unsafe { core::slice::from_raw_parts(cursor as *const u8, len) };
                 cursor = utils::align4(cursor + len);
-                let node_idx = arena.frames[sp - 1].node_idx;
-                if arena.nodes[node_idx].prop_count == 0 {
-                    arena.nodes[node_idx].first_prop_idx = Some(prop_idx);
+                let cur_node_idx = arena.frames[sp - 1].node_idx;
+                if arena.nodes[cur_node_idx].prop_count == 0 {
+                    arena.nodes[cur_node_idx].first_prop_idx = Some(prop_idx);
                 }
-                arena.nodes[node_idx].prop_count += 1;
-                arena.props[prop_idx] = Property {
-                    name,
-                    prop_str_slice,
-                };
+                arena.nodes[cur_node_idx].prop_count += 1;
+                arena.props[prop_idx] = Property { name, value };
                 prop_idx += 1;
             }
             FDT_NODE_END => sp -= 1,
@@ -288,8 +284,8 @@ fn build(b: &FdtBlocks) -> Result<(), FdtError> {
     }
 
     cursor = b.rsvmap_base;
-    for r in arena.reserved.iter_mut() {
-        *r = Region {
+    for region in arena.reserved.iter_mut() {
+        *region = Resource {
             base: read_be_u64_from_addr(cursor),
             size: read_be_u64_from_addr(cursor + 8),
         };
@@ -299,7 +295,7 @@ fn build(b: &FdtBlocks) -> Result<(), FdtError> {
     Ok(())
 }
 
-struct Node {
+pub(crate) struct Node {
     name: &'static [u8],
     paren_idx: Option<usize>,
     first_child_idx: Option<usize>,
@@ -308,9 +304,9 @@ struct Node {
     prop_count: u32,
 }
 
-struct Property {
+pub(crate) struct Property {
     name: &'static [u8],
-    prop_str_slice: &'static [u8],
+    value: &'static [u8],
 }
 
 struct Frame {
@@ -318,31 +314,25 @@ struct Frame {
     last_child_idx: Option<usize>,
 }
 
-pub(crate) struct Region {
+pub(crate) struct Resource {
     pub(crate) base: u64,
-    size: u64,
+    pub(crate) size: u64,
 }
 
 const ARENA_SIZE_BYTES: usize = 64 * 1024;
 struct Arena {
     data: [u8; ARENA_SIZE_BYTES],
     used: usize,
-    node_count: u32,
-    prop_count: u32,
-    reserved_count: u32,
     root: usize,
     nodes: &'static mut [Node],
     props: &'static mut [Property],
-    reserved: &'static mut [Region],
+    reserved: &'static mut [Resource],
     frames: &'static mut [Frame],
 }
 
 static ARENA: SyncUnsafeCell<Arena> = SyncUnsafeCell::new(Arena {
     data: [0; ARENA_SIZE_BYTES],
     used: 0,
-    node_count: 0,
-    prop_count: 0,
-    reserved_count: 0,
     root: 0,
     nodes: &mut [],
     props: &mut [],
@@ -390,12 +380,12 @@ fn init_arena(c: &Counts) -> Result<(), FdtError> {
     };
 
     let reserved_off = arena_alloc(
-        c.reserved as usize * size_of::<Region>(),
-        align_of::<Region>(),
+        c.reserved as usize * size_of::<Resource>(),
+        align_of::<Resource>(),
     )?;
     arena.reserved = unsafe {
         core::slice::from_raw_parts_mut(
-            arena_base.add(reserved_off).cast::<Region>(),
+            arena_base.add(reserved_off).cast::<Resource>(),
             c.reserved as usize,
         )
     };
@@ -414,87 +404,97 @@ fn arena_alloc(size: usize, align: usize) -> Result<usize, FdtError> {
     Ok(start)
 }
 
-pub(crate) fn find_compatible(s: &[u8]) -> Option<usize> {
-    (0..get_mut_arena().nodes.len()).find(|&id| compatible_has(id, s))
+/// Finds first compatible Node idx in Arena buf
+pub(crate) fn find_compatible_node_idx(s: &[u8]) -> Option<usize> {
+    (0..nodes().len()).find(|&node_idx| compatible_has(node_idx, s))
 }
 
-pub(crate) fn compatible_has(id: usize, s: &[u8]) -> bool {
-    let Some(v) = prop(id, b"compatible") else {
+/// Checks if a Node lists `s` in its compatible Property
+pub(crate) fn compatible_has(node_idx: usize, s: &[u8]) -> bool {
+    let Some(v) = get_node_prop_value_by_name(node_idx, b"compatible") else {
         return false;
     };
     v.split(|&b| b == 0).any(|x| x == s)
 }
 
-pub(crate) fn reg(id: usize, i: usize) -> Option<Region> {
-    let v = prop(id, b"reg")?;
-    let ac = address_cells(id);
-    let sc = size_cells(id);
-    let width = (ac + sc) * 4;
-    if width == 0 {
+/// Returns the `index`-th Resource of a Node from its reg Property
+pub(crate) fn get_resource(node_idx: usize, resource_idx: usize) -> Option<Resource> {
+    let resource = get_node_prop_value_by_name(node_idx, b"reg")?;
+    let ac = address_cells(node_idx);
+    let sc = size_cells(node_idx);
+    let width_bytes = (ac + sc) * 4;
+    if width_bytes == 0 {
         return None;
     }
-    let off = i.checked_mul(width)?;
-    let end = off.checked_add(width)?;
-    if end > v.len() {
+    let off = resource_idx.checked_mul(width_bytes)?;
+    let end = off.checked_add(width_bytes)?;
+    if end > resource.len() {
         return None;
     }
-    let base = decode_cells(&v[off..off + ac * 4])?;
+    let base = decode_cells(&resource[off..off + ac * 4])?;
     let size = if sc == 0 {
         0
     } else {
-        decode_cells(&v[off + ac * 4..end])?
+        decode_cells(&resource[off + ac * 4..end])?
     };
-    Some(Region { base, size })
+    Some(Resource { base, size })
 }
 
 fn decode_cells(cells: &[u8]) -> Option<u64> {
     match cells.len() {
-        4 => Some(u32::from_be_bytes([cells[0], cells[1], cells[2], cells[3]]) as u64),
+        4 => Some(u64::from(u32::from_be_bytes([
+            cells[0], cells[1], cells[2], cells[3],
+        ]))),
         8 => {
-            let hi = u32::from_be_bytes([cells[0], cells[1], cells[2], cells[3]]) as u64;
-            let lo = u32::from_be_bytes([cells[4], cells[5], cells[6], cells[7]]) as u64;
+            let hi = u64::from(u32::from_be_bytes([cells[0], cells[1], cells[2], cells[3]]));
+            let lo = u64::from(u32::from_be_bytes([cells[4], cells[5], cells[6], cells[7]]));
             Some((hi << 32) | lo)
         }
         _ => None,
     }
 }
 
-pub(crate) fn size_cells(id: usize) -> usize {
-    parent_cells(id, b"#size-cells", 1)
+/// Returns the #size-cells of the nearest ancestor, 1 if unset
+pub(crate) fn size_cells(node_idx: usize) -> usize {
+    get_parent_prop_by_name(node_idx, b"#size-cells", 1) // IEEE 1275 / DT spec default
 }
 
-pub(crate) fn address_cells(id: usize) -> usize {
-    parent_cells(id, b"#address-cells", 2)
+/// Returns the #address-cells of the nearest ancestor, 2 if unset
+pub(crate) fn address_cells(node_idx: usize) -> usize {
+    get_parent_prop_by_name(node_idx, b"#address-cells", 2) // IEEE 1275 / DT spec default
 }
 
-fn parent_cells(id: usize, name: &[u8], default: usize) -> usize {
-    let mut cur = node(id).and_then(|n| n.paren_idx);
-    while let Some(p) = cur {
-        if let Some(v) = prop_u32(p, name) {
+fn get_parent_prop_by_name(node_idx: usize, name: &[u8], default: usize) -> usize {
+    let mut parent = get_node_from_arena_by_idx(node_idx).and_then(|n| n.paren_idx);
+    while let Some(p) = parent {
+        if let Some(v) = find_node_u32_sized_prop_by_name(p, name) {
             return v as usize;
         }
-        cur = node(p).and_then(|n| n.paren_idx);
+        parent = get_node_from_arena_by_idx(p).and_then(|n| n.paren_idx);
     }
     default
 }
 
-pub(crate) fn prop_u32(id: usize, name: &[u8]) -> Option<u32> {
-    let v = prop(id, name)?;
+/// Returns the u32 value of a named Property of a Node
+pub(crate) fn find_node_u32_sized_prop_by_name(node_idx: usize, name: &[u8]) -> Option<u32> {
+    let v = get_node_prop_value_by_name(node_idx, name)?;
     if v.len() != 4 {
         return None;
     }
     Some(u32::from_be_bytes([v[0], v[1], v[2], v[3]]))
 }
 
-pub(crate) fn prop(id: usize, name: &[u8]) -> Option<&'static [u8]> {
-    props(id)
+/// Returns the raw value of a named Property of a Node
+pub(crate) fn get_node_prop_value_by_name(node_idx: usize, name: &[u8]) -> Option<&'static [u8]> {
+    get_node_props(node_idx)
         .iter()
         .find(|p| p.name == name)
-        .map(|p| p.prop_str_slice)
+        .map(|p| p.value)
 }
 
-pub(crate) fn props(id: usize) -> &'static [Property] {
-    let Some(n) = nodes().get(id) else {
+/// Returns Property Slice of a Node from Arena buf
+pub(crate) fn get_node_props(node_idx: usize) -> &'static [Property] {
+    let Some(n) = nodes().get(node_idx) else {
         return &[];
     };
     let Some(start) = n.first_prop_idx else {
@@ -504,10 +504,83 @@ pub(crate) fn props(id: usize) -> &'static [Property] {
     get_arena().props.get(start..end).unwrap_or(&[])
 }
 
-pub(crate) fn node(id: usize) -> Option<&'static Node> {
-    nodes().get(id)
+/// Returns a Node from Arena buf
+pub(crate) fn get_node_from_arena_by_idx(node_idx: usize) -> Option<&'static Node> {
+    nodes().get(node_idx)
 }
 
 fn nodes() -> &'static [Node] {
     get_arena().nodes
+}
+
+/// Returns the parent Node index
+pub(crate) fn get_parent_by_node_idx(node_idx: usize) -> Option<usize> {
+    get_node_from_arena_by_idx(node_idx)?.paren_idx
+}
+
+/// Returns the phandle Property of a Node
+pub(crate) fn get_node_phandle_prop_by_idx(node_idx: usize) -> Option<u32> {
+    find_node_u32_sized_prop_by_name(node_idx, b"phandle")
+        .or_else(|| find_node_u32_sized_prop_by_name(node_idx, b"linux,phandle"))
+}
+
+/// Returns the Node index that holds the given phandle
+pub(crate) fn find_node_by_phandle_prop(value: u32) -> Option<usize> {
+    (0..nodes().len()).find(|&node_idx| get_node_phandle_prop_by_idx(node_idx) == Some(value))
+}
+
+/// Returns the #interrupt-cells of a Node, 1 if unset
+pub(crate) fn interrupt_cells(node_idx: usize) -> Option<usize> {
+    get_node_from_arena_by_idx(node_idx)?;
+    Some(find_node_u32_sized_prop_by_name(node_idx, b"#interrupt-cells").map_or(1, |v| v as usize))
+}
+
+/// Returns entry `index` of the interrupts-extended Property as (phandle, args[0]).
+/// The entry width comes from the #interrupt-cells of the referenced controller.
+pub(crate) fn interrupts_extended(node_idx: usize, index: usize) -> Option<(u32, u32)> {
+    let v = get_node_prop_value_by_name(node_idx, b"interrupts-extended")?;
+    let mut off = 0usize;
+    for i in 0..=index {
+        let ph = utils::read_be_u32_from_bytes(&v[off..])?;
+        let cells = interrupt_cells(find_node_by_phandle_prop(ph)?)?;
+        let end = off.checked_add(4 + cells * 4)?;
+        if end > v.len() {
+            return None;
+        }
+        if i == index {
+            return Some((ph, utils::read_be_u32_from_bytes(&v[off + 4..])?));
+        }
+        off = end;
+    }
+    None
+}
+
+/// Returns args[0] of entry `index` of the interrupts Property
+pub(crate) fn get_node_interrupt_by_idx(node_idx: usize, inter_idx: usize) -> Option<u32> {
+    let interrupt_controller = find_interrupt_controller_amongst_parent_nodes(node_idx)?;
+    let cells = interrupt_cells(interrupt_controller)?;
+    if cells == 0 {
+        return None;
+    }
+    let v = get_node_prop_value_by_name(node_idx, b"interrupts")?;
+    let off = inter_idx.checked_mul(cells * 4)?;
+    let end = off.checked_add(cells * 4)?;
+    if end > v.len() {
+        return None;
+    }
+    utils::read_be_u32_from_bytes(&v[off..])
+}
+
+fn find_interrupt_controller_amongst_parent_nodes(node_idx: usize) -> Option<usize> {
+    if let Some(value) = find_node_u32_sized_prop_by_name(node_idx, b"interrupt-parent") {
+        return find_node_by_phandle_prop(value);
+    }
+    let mut cur = get_parent_by_node_idx(node_idx);
+    while let Some(p) = cur {
+        if get_node_prop_value_by_name(p, b"interrupt-controller").is_some() {
+            return Some(p);
+        }
+        cur = get_parent_by_node_idx(p);
+    }
+    None
 }
