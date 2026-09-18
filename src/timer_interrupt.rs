@@ -14,6 +14,7 @@ fn tick() {
     }
 }
 
+/// Arms the next timer interrupt.
 pub(crate) fn set_timer_interval_for_interrupt() {
     let now: u64;
     unsafe {
@@ -22,14 +23,15 @@ pub(crate) fn set_timer_interval_for_interrupt() {
     }
 }
 
+/// Enables the S-mode timer interrupt. Runs in M-mode.
 pub(crate) fn timer_init() {
     unsafe {
-        asm!("csrs menvcfg, {0}", in(reg) 1usize << 63);
-        asm!("csrs mcounteren, {0}", in(reg) 1usize << 1);
+        asm!("csrs menvcfg, {0}", in(reg) 1usize << 63); // STCE: allow S-mode access to stimecmp.
+        asm!("csrs mcounteren, {0}", in(reg) 1usize << 1); // TM: allow S-mode reads of the time CSR.
     }
     set_timer_interval_for_interrupt();
     unsafe {
-        asm!("csrs mie, {0}", in(reg) 1usize << 5); // STIE
+        asm!("csrs mie, {0}", in(reg) 1usize << 5); // STIE: enable the supervisor timer interrupt.
     }
 }
 

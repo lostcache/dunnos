@@ -26,6 +26,8 @@ struct FdtBlocks {
     end: usize,
 }
 
+/// Parses the DTB into the arena. Fails when the header or the
+/// structure is invalid or the arena is too small.
 pub(crate) fn probe() -> Result<(), FdtError> {
     let fdt_base = unsafe { crate::dtb_ptr };
     let blocks = parse_header(fdt_base)?;
@@ -102,6 +104,8 @@ struct Counts {
     reserved: u32,
 }
 
+/// Pass 1: counts Nodes, Properties, maximum depth, and reserved
+/// memory regions. This size the arena slices.
 fn count(b: &FdtBlocks) -> Result<Counts, FdtError> {
     let mut cursor = b.struct_base;
     let struct_end = b.struct_base + b.size_dt_struct;
@@ -209,6 +213,8 @@ fn count(b: &FdtBlocks) -> Result<Counts, FdtError> {
     })
 }
 
+/// Pass 2: fills the arena slices with node and property entries, and
+/// links parents, children, and siblings.
 fn parse_dt(b: &FdtBlocks) -> Result<(), FdtError> {
     let arena = get_mut_arena();
 
@@ -348,6 +354,8 @@ fn get_arena() -> &'static Arena {
     unsafe { &*ARENA.get() }
 }
 
+/// Reserves the node, property, traversal-frame, and reserved-region
+/// slices in the arena data block.
 fn init_arena(c: &Counts) -> Result<(), FdtError> {
     let arena = get_mut_arena();
     let arena_base = arena.data.as_mut_ptr();
@@ -393,6 +401,8 @@ fn init_arena(c: &Counts) -> Result<(), FdtError> {
     Ok(())
 }
 
+/// Bump-allocates aligned bytes from the arena and returns the offset
+/// from its start.
 fn arena_alloc(size: usize, align: usize) -> Result<usize, FdtError> {
     let a = get_mut_arena();
     let start = utils::align_up(a.used, align);
@@ -404,12 +414,14 @@ fn arena_alloc(size: usize, align: usize) -> Result<usize, FdtError> {
     Ok(start)
 }
 
-/// Finds first compatible Node idx in Arena buf
+/// Returns the index of the first node whose compatible property lists
+/// the given string.
 pub(crate) fn find_compatible_node_idx(s: &[u8]) -> Option<usize> {
     (0..nodes().len()).find(|&node_idx| compatible_has(node_idx, s))
 }
 
-/// Checks if a Node lists `s` in its compatible Property
+/// Returns true when the compatible property of a node lists the given
+/// string.
 pub(crate) fn compatible_has(node_idx: usize, s: &[u8]) -> bool {
     let Some(v) = get_node_prop_value_by_name(node_idx, b"compatible") else {
         return false;
@@ -417,7 +429,9 @@ pub(crate) fn compatible_has(node_idx: usize, s: &[u8]) -> bool {
     v.split(|&b| b == 0).any(|x| x == s)
 }
 
-/// Returns the `index`-th Resource of a Node from its reg Property
+/// Returns the resource at the given position from a node's reg
+/// property. The cell counts come from the nearest ancestor with
+/// #address-cells and #size-cells.
 pub(crate) fn get_resource(node_idx: usize, resource_idx: usize) -> Option<Resource> {
     let resource = get_node_prop_value_by_name(node_idx, b"reg")?;
     let ac = address_cells(node_idx);
@@ -454,14 +468,14 @@ fn decode_cells(cells: &[u8]) -> Option<u64> {
     }
 }
 
-/// Returns the #size-cells of the nearest ancestor, 1 if unset
+/// Returns the #size-cells of the nearest ancestor, 1 when unset.
 pub(crate) fn size_cells(node_idx: usize) -> usize {
-    get_parent_prop_by_name(node_idx, b"#size-cells", 1) // IEEE 1275 / DT spec default
+    get_parent_prop_by_name(node_idx, b"#size-cells", 1) // DT spec default
 }
 
-/// Returns the #address-cells of the nearest ancestor, 2 if unset
+/// Returns the #address-cells of the nearest ancestor, 2 when unset.
 pub(crate) fn address_cells(node_idx: usize) -> usize {
-    get_parent_prop_by_name(node_idx, b"#address-cells", 2) // IEEE 1275 / DT spec default
+    get_parent_prop_by_name(node_idx, b"#address-cells", 2) // DT spec default
 }
 
 fn get_parent_prop_by_name(node_idx: usize, name: &[u8], default: usize) -> usize {
@@ -475,7 +489,8 @@ fn get_parent_prop_by_name(node_idx: usize, name: &[u8], default: usize) -> usiz
     default
 }
 
-/// Returns the u32 value of a named Property of a Node
+/// Returns the u32 value of a named property of a node. None when the
+/// property is absent or its length is not 4 bytes.
 pub(crate) fn find_node_u32_sized_prop_by_name(node_idx: usize, name: &[u8]) -> Option<u32> {
     let v = get_node_prop_value_by_name(node_idx, name)?;
     if v.len() != 4 {
@@ -484,7 +499,7 @@ pub(crate) fn find_node_u32_sized_prop_by_name(node_idx: usize, name: &[u8]) -> 
     Some(u32::from_be_bytes([v[0], v[1], v[2], v[3]]))
 }
 
-/// Returns the raw value of a named Property of a Node
+/// Returns the raw bytes of a named property of a node.
 pub(crate) fn get_node_prop_value_by_name(node_idx: usize, name: &[u8]) -> Option<&'static [u8]> {
     get_node_props(node_idx)
         .iter()
@@ -492,7 +507,8 @@ pub(crate) fn get_node_prop_value_by_name(node_idx: usize, name: &[u8]) -> Optio
         .map(|p| p.value)
 }
 
-/// Returns Property Slice of a Node from Arena buf
+/// Returns the property slice of a node. Empty when the node index is
+/// out of range or the node has no property.
 pub(crate) fn get_node_props(node_idx: usize) -> &'static [Property] {
     let Some(n) = nodes().get(node_idx) else {
         return &[];
@@ -504,7 +520,7 @@ pub(crate) fn get_node_props(node_idx: usize) -> &'static [Property] {
     get_arena().props.get(start..end).unwrap_or(&[])
 }
 
-/// Returns a Node from Arena buf
+/// Returns a node by index. None when the index is out of range.
 pub(crate) fn get_node_from_arena_by_idx(node_idx: usize) -> Option<&'static Node> {
     nodes().get(node_idx)
 }
@@ -513,30 +529,38 @@ fn nodes() -> &'static [Node] {
     get_arena().nodes
 }
 
-/// Returns the parent Node index
+/// Returns the parent node index.
 pub(crate) fn get_parent_by_node_idx(node_idx: usize) -> Option<usize> {
     get_node_from_arena_by_idx(node_idx)?.paren_idx
 }
 
-/// Returns the phandle Property of a Node
+/// Returns the phandle of a node. Accepts the legacy `linux,phandle`.
 pub(crate) fn get_node_phandle_prop_by_idx(node_idx: usize) -> Option<u32> {
     find_node_u32_sized_prop_by_name(node_idx, b"phandle")
         .or_else(|| find_node_u32_sized_prop_by_name(node_idx, b"linux,phandle"))
 }
 
-/// Returns the Node index that holds the given phandle
+/// Returns the index of the node that holds the given phandle.
 pub(crate) fn find_node_by_phandle_prop(value: u32) -> Option<usize> {
     (0..nodes().len()).find(|&node_idx| get_node_phandle_prop_by_idx(node_idx) == Some(value))
 }
 
-/// Returns the #interrupt-cells of a Node, 1 if unset
+/// Returns the #interrupt-cells of a node, 1 when unset.
 pub(crate) fn interrupt_cells(node_idx: usize) -> Option<usize> {
     get_node_from_arena_by_idx(node_idx)?;
     Some(find_node_u32_sized_prop_by_name(node_idx, b"#interrupt-cells").map_or(1, |v| v as usize))
 }
 
-/// Returns entry `index` of the interrupts-extended Property as (phandle, args[0]).
-/// The entry width comes from the #interrupt-cells of the referenced controller.
+/// Returns one entry of an interrupts-extended property as
+/// `(phandle, args[0])`.
+///
+/// Each entry starts with a phandle, followed by the specifier cells of
+/// the controller that the phandle points to. The specifier width is
+/// that controller's #interrupt-cells. args[0] is the first specifier
+/// cell.
+///
+/// None when the entry is absent, truncated, or the phandle is
+/// dangling.
 pub(crate) fn interrupts_extended(node_idx: usize, index: usize) -> Option<(u32, u32)> {
     let v = get_node_prop_value_by_name(node_idx, b"interrupts-extended")?;
     let mut off = 0usize;
@@ -555,7 +579,11 @@ pub(crate) fn interrupts_extended(node_idx: usize, index: usize) -> Option<(u32,
     None
 }
 
-/// Returns args[0] of entry `index` of the interrupts Property
+/// Returns args[0] of one entry of an interrupts property.
+///
+/// The controller is the interrupt-parent of the node, or the nearest
+/// ancestor with an interrupt-controller property. The entry width is
+/// the #interrupt-cells of that controller.
 pub(crate) fn get_node_interrupt_by_idx(node_idx: usize, inter_idx: usize) -> Option<u32> {
     let interrupt_controller = find_interrupt_controller_amongst_parent_nodes(node_idx)?;
     let cells = interrupt_cells(interrupt_controller)?;
