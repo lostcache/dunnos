@@ -17,7 +17,7 @@ extern "C" fn kerneltrap() {
         match code {
             SUPERVISOR_EXTERNAL_INTERRUPT_CODE => {
                 let irq = plic::claim();
-                if irq == uart::IRQ {
+                if irq == uart::irq() {
                     uart::handle_interrupt();
                 }
                 if irq != 0 {
@@ -25,10 +25,14 @@ extern "C" fn kerneltrap() {
                 }
             }
             TIMER_INTERRUPT => timer_interrupt::handle_timer_interrupt(),
-            _ => loop {},
+            _ => loop {
+                core::hint::spin_loop();
+            },
         }
     } else {
-        loop {}
+        loop {
+            core::hint::spin_loop();
+        }
     }
 }
 
@@ -36,7 +40,9 @@ unsafe extern "C" {
     pub(crate) fn _kerneltrapvec();
 }
 
-// x0 is hardwired to zero, x2 (sp) is restored arithmetically.
+// All registers except x0 and x2 are saved. x0 is constant zero. x2
+// (sp) needs no save: the prologue subtracts a constant that the
+// epilogue adds back.
 global_asm!(
     r#"
     .global _kerneltrapvec
