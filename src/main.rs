@@ -102,11 +102,11 @@ pub extern "C" fn start() {
     match fdt_result {
         Ok(()) => {
             uart::send_byte(b'F');
-            let uart_ok = fdt::find_compatible(b"ns16550a")
-                .and_then(|id| fdt::reg(id, 0))
+            let uart_ok = fdt::find_compatible_node_idx(b"ns16550a")
+                .and_then(|id| fdt::get_resource(id, 0))
                 .is_some_and(|r| r.base == 0x1000_0000);
-            let plic_ok = fdt::find_compatible(b"riscv,plic0")
-                .and_then(|id| fdt::reg(id, 0))
+            let plic_ok = fdt::find_compatible_node_idx(b"riscv,plic0")
+                .and_then(|id| fdt::get_resource(id, 0))
                 .is_some_and(|r| r.base == 0x0c00_0000);
             uart::send_byte(if uart_ok && plic_ok { b'+' } else { b'-' });
         }
