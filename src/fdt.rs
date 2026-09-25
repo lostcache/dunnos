@@ -131,7 +131,7 @@ fn count(b: &FdtBlocks) -> Result<Counts, FdtError> {
                 else {
                     return Err(FdtError::BadStructure);
                 };
-                cursor = utils::align4(cursor + name.len() + 1); // + 1 for the NUL terminator
+                cursor = (cursor + name.len() + 1).next_multiple_of(4); // + 1 for the NUL terminator
                 if cursor > struct_end {
                     return Err(FdtError::BadStructure);
                 }
@@ -162,7 +162,7 @@ fn count(b: &FdtBlocks) -> Result<Counts, FdtError> {
                 {
                     return Err(FdtError::BadStructure);
                 }
-                cursor = utils::align4(cursor + prop_len);
+                cursor = (cursor + prop_len).next_multiple_of(4);
                 if cursor >= struct_end {
                     return Err(FdtError::BadStructure);
                 }
@@ -233,7 +233,7 @@ fn parse_dt(b: &FdtBlocks) -> Result<(), FdtError> {
                 else {
                     return Err(FdtError::BadStructure);
                 };
-                cursor = utils::align4(cursor + name.len() + 1);
+                cursor = (cursor + name.len() + 1).next_multiple_of(4);
                 arena.nodes[node_idx] = Node {
                     name,
                     paren_idx: None,
@@ -273,7 +273,7 @@ fn parse_dt(b: &FdtBlocks) -> Result<(), FdtError> {
                     return Err(FdtError::BadStructure);
                 };
                 let value = unsafe { core::slice::from_raw_parts(cursor as *const u8, len) };
-                cursor = utils::align4(cursor + len);
+                cursor = (cursor + len).next_multiple_of(4);
                 let cur_node_idx = arena.frames[sp - 1].node_idx;
                 if arena.nodes[cur_node_idx].prop_count == 0 {
                     arena.nodes[cur_node_idx].first_prop_idx = Some(prop_idx);
@@ -405,7 +405,7 @@ fn init_arena(c: &Counts) -> Result<(), FdtError> {
 /// from its start.
 fn arena_alloc(size: usize, align: usize) -> Result<usize, FdtError> {
     let a = get_mut_arena();
-    let start = utils::align_up(a.used, align);
+    let start = a.used.next_multiple_of(align);
     let end = start.checked_add(size).ok_or(FdtError::ArenaFull)?;
     if end > ARENA_SIZE_BYTES {
         return Err(FdtError::ArenaFull);
