@@ -1,6 +1,8 @@
 use crate::utils::{self, read_be_u64_from_addr};
 use core::{cell::SyncUnsafeCell, cmp::max};
 
+static mut FDT_TOTAL_SIZE: u32 = 0;
+
 const MAGIC_VALUE: u32 = 0xd00d_feed;
 const FDT_BEGIN_NODE: u32 = 1;
 const FDT_NODE_END: u32 = 2;
@@ -50,6 +52,8 @@ fn parse_header(fdt_base: usize) -> Result<FdtBlocks, FdtError> {
     if total_size < 32 {
         return Err(FdtError::BadHeader);
     }
+
+    unsafe { FDT_TOTAL_SIZE = total_size as u32 };
 
     let off_dt_struct = utils::read_be_u32_from_addr(fdt_base + 8) as usize;
     let off_dt_strings = utils::read_be_u32_from_addr(fdt_base + 12) as usize;
@@ -611,4 +615,22 @@ fn find_interrupt_controller_amongst_parent_nodes(node_idx: usize) -> Option<usi
         cur = get_parent_by_node_idx(p);
     }
     None
+}
+
+pub(crate) fn fdt_total_size() -> u32 {
+    unsafe { FDT_TOTAL_SIZE }
+}
+
+pub(crate) fn get_reserved() -> &'static [Resource] {
+    get_arena().reserved
+}
+
+pub(crate) fn get_node_idx_by_prop_name_and_val(
+    prop_name: &[u8],
+    prop_val: &[u8],
+) -> Option<usize> {
+    (0..nodes().len()).find(|&node_idx| {
+        get_node_prop_value_by_name(node_idx, prop_name)
+            .is_some_and(|v| v.split(|&b| b == 0).any(|s| s == prop_val))
+    })
 }
