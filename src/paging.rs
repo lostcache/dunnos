@@ -95,12 +95,10 @@ fn svpbmt_supported() -> bool {
 /// given compatible string. Does nothing when the node or the
 /// resource is absent. Extra mappings are harmless.
 fn map_mmio_device(root: usize, compatible: &[u8], flags: u64) -> Result<(), PagingError> {
-    // TODO: why are we returning Ok if compatible is None?
     let Some(node_idx) = fdt::find_compatible_node_idx(compatible) else {
         return Ok(());
     };
 
-    // TODO: why are we returning Ok if get_resource is None?
     let Some(resource) = fdt::get_resource(node_idx, 0) else {
         return Ok(());
     };
