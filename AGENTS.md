@@ -2,3 +2,5 @@
 - No padding texts at all.
 - Strictly stick to ASD-STE100
 - No Qemu specific examples and code, reference linux kernel
+- No Qemu specific plans.
+- Never use abbreviations in the response only {full_form}(abbreviation).

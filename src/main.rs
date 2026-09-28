@@ -7,6 +7,8 @@ use core::panic::PanicInfo;
 
 mod fdt;
 mod kernel_trap;
+mod mm;
+mod paging;
 mod plic;
 mod timer_interrupt;
 mod uart;
@@ -29,16 +31,24 @@ stack0:
     .section .text.entry
     .global _entry
 _entry:
+    // TODO(SMP)
+    csrr t0, mhartid
+    bne  t0, a0, .Lpark
+
     la   sp, stack0
-    csrr a0, mhartid
-    addi a0, a0, 1
+    addi a0, t0, 1
     slli a0, a0, 12
     add  sp, sp, a0          // sp = top of this hart's stack slot.
 
     la   t0, dtb_ptr
     sd   a1, 0(t0)
 
+
     call start
+
+.Lpark:
+    wfi
+    j .Lpark
 "#
 );
 
@@ -49,6 +59,13 @@ fn panic(_: &PanicInfo) -> ! {
 
 fn main() {
     unsafe {
+        /*
+        Hardware may keep old translations in the TLB.
+        The write to satp does not clear the TLB on all implementations.
+        sfence.vma zero, zero makes all cached translations invalid. The next accesses use the new tables.
+        */
+        asm!("sfence.vma zero, zero");
+
         asm!("csrs sstatus, {0}", in(reg) 1usize << 1); // SIE: enable interrupts in S-mode.
     }
     loop {
@@ -109,6 +126,18 @@ pub extern "C" fn start() {
         if uart::found() {
             uart::send_byte(b'F');
             uart::send_byte(if uart_ok && plic_ok { b'+' } else { b'-' });
+        }
+
+        if mm::init().is_ok()
+            && let Ok(root) = paging::init()
+            && let Some(range) = mm::get_physical_ranges().first()
+        {
+            let probe = range.start.next_multiple_of(mm::PAGE_SIZE);
+            if probe < range.end
+                && paging::translate_virtual_to_physical(root, probe) == Some(probe)
+            {
+                uart::send_byte(b'p');
+            }
         }
     }
 
