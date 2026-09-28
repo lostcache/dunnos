@@ -140,6 +140,31 @@ fn map_identity_range(
     Ok(())
 }
 
+/// Returns the physical base address of the page that the root
+/// table maps the virtual address to. Returns None when the walk
+/// meets an invalid or pointer entry at the wrong level. The
+/// return value excludes the page offset.
+pub(crate) fn translate_virtual_to_physical(
+    root_table: usize,
+    virtual_address: usize,
+) -> Option<usize> {
+    let mut table = root_table;
+    for level in [2, 1] {
+        let entry = read_page_table_entry(table, page_table_index(virtual_address, level));
+        match classify_page_table_entry(entry) {
+            PageTableEntryKind::NextTablePointer => {
+                table = page_table_entry_to_physical_address(entry);
+            }
+            _ => return None,
+        }
+    }
+    let entry = read_page_table_entry(table, page_table_index(virtual_address, 0));
+    match classify_page_table_entry(entry) {
+        PageTableEntryKind::Leaf => Some(page_table_entry_to_physical_address(entry)),
+        _ => None,
+    }
+}
+
 pub(crate) fn map_virtual_to_physical(
     root_table: usize,
     virtual_address: usize,
