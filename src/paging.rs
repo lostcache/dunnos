@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
-use crate::mm;
+use core::arch::asm;
+
+use crate::{fdt, mm};
 
 const PAGE_TABLE_ENTRIES_PER_PAGE: usize = 512;
 const PAGE_SHIFT: usize = 12;
@@ -19,6 +21,9 @@ const DIRTY: u64 = 1 << 7;
 const SUPERVISOR_ADDRESS_TRANSLATION_AND_PROTECTION_MODE_SV39: u64 = 8 << 60;
 const SV39_VIRTUAL_ADDRESS_BITS: usize = 39;
 const BITS_PER_REGISTER: usize = 64;
+
+/// PBMT = 01: input/output memory type. PTE bits 62:61.
+const PHYSICAL_MEMORY_TYPE_INPUT_OUTPUT: u64 = 1 << 61;
 
 struct Frame {
     frames: [u64; 512],
@@ -39,6 +44,29 @@ enum PageTableEntryKind {
     Leaf,
     /// V=1, W=1, R=0: the spec reserves this encoding.
     ReservedWritableWithoutRead,
+}
+
+/// Sets menvcfg bit 62 (PBMTE). Machine mode only.
+fn set_page_based_memory_type_enable_bit() {
+    const PAGE_BASED_MEMORY_TYPE_ENABLE_BIT: usize = 1 << 62;
+    unsafe {
+        asm!("csrs menvcfg, {0}", in(reg) PAGE_BASED_MEMORY_TYPE_ENABLE_BIT);
+    }
+}
+
+fn svpbmt_supported() -> bool {
+    let Some(cpu_node_idx) = fdt::get_node_idx_by_prop_name_and_val(b"device_type", b"cpu") else {
+        return false;
+    };
+    let Some(isa) = fdt::get_node_prop_value_by_name(cpu_node_idx, b"riscv,isa") else {
+        return false;
+    };
+    let Some(len) = isa.iter().position(|&b| b == 0) else {
+        return false;
+    };
+    isa[..len]
+        .split(|&b| b == b'_')
+        .any(|token| token == b"svpbmt".as_slice())
 }
 
 pub(crate) fn map_virtual_to_physical(
