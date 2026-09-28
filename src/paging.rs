@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use core::arch::asm;
 
 use crate::{fdt, mm};
@@ -9,7 +7,7 @@ const PAGE_SHIFT: usize = 12;
 const PAGE_TABLE_ENTRY_PHYSICAL_PAGE_NUMBER_SHIFT: usize = 10;
 const PAGE_TABLE_ENTRY_PHYSICAL_PAGE_NUMBER_MASK: u64 = (1 << 44) - 1;
 
-const PRESENT: u64 = 1 << 0;
+const PTE_PRESENT: u64 = 1 << 0;
 const READ: u64 = 1 << 1;
 const WRITE: u64 = 1 << 2;
 const EXECUTE: u64 = 1 << 3;
@@ -25,9 +23,12 @@ const BITS_PER_REGISTER: usize = 64;
 /// PBMT = 01: input/output memory type. PTE bits 62:61.
 const PHYSICAL_MEMORY_TYPE_INPUT_OUTPUT: u64 = 1 << 61;
 
-struct Frame {
-    frames: [u64; 512],
-}
+/// Flags for each identity-mapped RAM page. Execute is set because
+/// the kernel image lives in RAM. Global is set: one kernel map.
+const IDENTITY_MAP_FLAGS: u64 = READ | WRITE | EXECUTE | GLOBAL;
+
+/// Flags for each MMIO page. No execute: device registers are data.
+const MMIO_FLAGS: u64 = READ | WRITE | GLOBAL;
 
 pub(crate) enum PagingError {
     InvalidAddress,
@@ -44,6 +45,27 @@ enum PageTableEntryKind {
     Leaf,
     /// V=1, W=1, R=0: the spec reserves this encoding.
     ReservedWritableWithoutRead,
+}
+
+/// Builds the kernel page tables in machine mode (M-mode).
+/// Returns the physical address of the root table.
+pub(crate) fn init() -> Result<usize, PagingError> {
+    let mut mmio_flags = MMIO_FLAGS;
+    if svpbmt_supported() {
+        set_page_based_memory_type_enable_bit();
+        mmio_flags |= PHYSICAL_MEMORY_TYPE_INPUT_OUTPUT;
+    }
+
+    let root = mm::alloc_frame().map_err(|_| PagingError::OutOfFrames)?;
+
+    for range in mm::get_physical_ranges() {
+        map_identity_range(root, range.start, range.end, IDENTITY_MAP_FLAGS)?;
+    }
+
+    map_mmio_device(root, b"ns16550a", mmio_flags)?;
+    map_mmio_device(root, b"riscv,plic0", mmio_flags)?;
+
+    Ok(root)
 }
 
 /// Sets menvcfg bit 62 (PBMTE). Machine mode only.
@@ -69,6 +91,55 @@ fn svpbmt_supported() -> bool {
         .any(|token| token == b"svpbmt".as_slice())
 }
 
+/// Identity maps the reg resource of the first node that lists the
+/// given compatible string. Does nothing when the node or the
+/// resource is absent. Extra mappings are harmless.
+fn map_mmio_device(root: usize, compatible: &[u8], flags: u64) -> Result<(), PagingError> {
+    // TODO: why are we returning Ok if compatible is None?
+    let Some(node_idx) = fdt::find_compatible_node_idx(compatible) else {
+        return Ok(());
+    };
+
+    // TODO: why are we returning Ok if get_resource is None?
+    let Some(resource) = fdt::get_resource(node_idx, 0) else {
+        return Ok(());
+    };
+
+    let Ok(base) = usize::try_from(resource.base) else {
+        return Ok(());
+    };
+
+    let Some(end) = usize::try_from(resource.size)
+        .ok()
+        .and_then(|size| base.checked_add(size))
+    else {
+        return Ok(());
+    };
+
+    map_identity_range(root, base, end, flags)
+}
+
+/// Identity maps every 4 KiB page that [start, end) touches.
+/// Aligns the start down and the end up, so a sub-page device is
+/// mapped. Skips a page that is mapped already:
+/// two devices may share a page, and RAM ranges may overlap.
+fn map_identity_range(
+    root: usize,
+    start: usize,
+    end: usize,
+    flags: u64,
+) -> Result<(), PagingError> {
+    let first_page = start & !(mm::PAGE_SIZE - 1);
+    let last_page = end.next_multiple_of(mm::PAGE_SIZE);
+    for addr in (first_page..last_page).step_by(mm::PAGE_SIZE) {
+        match map_virtual_to_physical(root, addr, addr, flags) {
+            Ok(()) | Err(PagingError::AlreadyMapped) => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn map_virtual_to_physical(
     root_table: usize,
     virtual_address: usize,
@@ -80,11 +151,12 @@ pub(crate) fn map_virtual_to_physical(
     {
         return Err(PagingError::InvalidAddress);
     }
+
     if !is_canonical(virtual_address) {
         return Err(PagingError::InvalidAddress);
     }
-    // TODO: still dunno what the fuck is this?
-    if physical_address >> PAGE_SHIFT > PAGE_TABLE_ENTRY_PHYSICAL_PAGE_NUMBER_MASK as usize {
+
+    if (physical_address >> PAGE_SHIFT) as u64 > PAGE_TABLE_ENTRY_PHYSICAL_PAGE_NUMBER_MASK {
         return Err(PagingError::InvalidAddress);
     }
 
@@ -98,7 +170,7 @@ pub(crate) fn map_virtual_to_physical(
                 write_page_table_entry(
                     current_table,
                     index,
-                    physical_address_to_page_table_entry(new_table) | PRESENT,
+                    physical_address_to_page_table_entry(new_table) | PTE_PRESENT,
                 );
                 current_table = new_table;
             }
@@ -119,9 +191,10 @@ pub(crate) fn map_virtual_to_physical(
                 index,
                 physical_address_to_page_table_entry(physical_address)
                     | flags
-                    | PRESENT
+                    | PTE_PRESENT
                     | ACCESSED
-                    | DIRTY,
+                    | DIRTY
+                    | GLOBAL, // Need to remove this later for ASID != 0
             );
             Ok(())
         }
@@ -132,7 +205,7 @@ pub(crate) fn map_virtual_to_physical(
 }
 
 fn classify_page_table_entry(entry: u64) -> PageTableEntryKind {
-    if entry & PRESENT == 0 {
+    if entry & PTE_PRESENT == 0 {
         PageTableEntryKind::NotPresent
     } else if entry & WRITE != 0 && entry & READ == 0 {
         PageTableEntryKind::ReservedWritableWithoutRead
