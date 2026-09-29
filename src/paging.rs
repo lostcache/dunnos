@@ -58,7 +58,7 @@ pub(crate) fn init() -> Result<usize, PagingError> {
 
     let root = mm::alloc_frame().map_err(|_| PagingError::OutOfFrames)?;
 
-    for range in mm::get_physical_ranges() {
+    for range in mm::get_physical_addr_ranges() {
         map_identity_range(root, range.start, range.end, IDENTITY_MAP_FLAGS)?;
     }
 
@@ -66,6 +66,18 @@ pub(crate) fn init() -> Result<usize, PagingError> {
     map_mmio_device(root, b"riscv,plic0", mmio_flags)?;
 
     Ok(root)
+}
+
+/// Activates the Sv39 page tables: writes `satp` with the mode field
+/// and the root table physical page number, then flushes the
+/// translation caches. Supervisor mode only.
+pub(crate) fn activate(root_table: usize) {
+    let satp = ((root_table >> PAGE_SHIFT) as u64)
+        | SUPERVISOR_ADDRESS_TRANSLATION_AND_PROTECTION_MODE_SV39;
+    unsafe {
+        asm!("csrw satp, {0}", in(reg) satp);
+        asm!("sfence.vma zero, zero");
+    }
 }
 
 /// Sets menvcfg bit 62 (PBMTE). Machine mode only.
@@ -142,7 +154,7 @@ fn map_identity_range(
 /// table maps the virtual address to. Returns None when the walk
 /// meets an invalid or pointer entry at the wrong level. The
 /// return value excludes the page offset.
-pub(crate) fn translate_virtual_to_physical(
+pub(crate) fn translate_virtual_to_physical_addr(
     root_table: usize,
     virtual_address: usize,
 ) -> Option<usize> {

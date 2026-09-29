@@ -205,7 +205,7 @@ fn get_mut_physical() -> &'static mut RangeList {
     unsafe { &mut *PHYSICAL.get() }
 }
 
-pub(crate) fn get_physical_ranges() -> &'static [Range] {
+pub(crate) fn get_physical_addr_ranges() -> &'static [Range] {
     let phy = get_mut_physical();
     &phy.ranges[..phy.len]
 }

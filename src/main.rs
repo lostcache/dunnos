@@ -3,6 +3,7 @@
 #![feature(sync_unsafe_cell)]
 
 use core::arch::{asm, global_asm};
+use core::cell::SyncUnsafeCell;
 use core::panic::PanicInfo;
 
 mod fdt;
@@ -20,6 +21,10 @@ mod utils;
 #[used]
 #[unsafe(no_mangle)]
 pub(crate) static mut dtb_ptr: usize = 0;
+
+/// Root page table physical address built by `paging::init()` in
+/// machine mode. `main()` reads it after handover to activate paging.
+static KERNEL_ROOT_TABLE: SyncUnsafeCell<usize> = SyncUnsafeCell::new(0);
 
 global_asm!(
     r#"
@@ -58,14 +63,15 @@ fn panic(_: &PanicInfo) -> ! {
 }
 
 fn main() {
-    unsafe {
-        /*
-        Hardware may keep old translations in the TLB.
-        The write to satp does not clear the TLB on all implementations.
-        sfence.vma zero, zero makes all cached translations invalid. The next accesses use the new tables.
-        */
-        asm!("sfence.vma zero, zero");
+    // The tables were built in machine mode. Turn them on now.
+    let root = unsafe { *KERNEL_ROOT_TABLE.get() };
+    paging::activate(root);
 
+    if uart::found() {
+        uart::send_byte(b'P');
+    }
+
+    unsafe {
         asm!("csrs sstatus, {0}", in(reg) 1usize << 1); // SIE: enable interrupts in S-mode.
     }
     loop {
@@ -130,14 +136,8 @@ pub extern "C" fn start() {
 
         if mm::init().is_ok()
             && let Ok(root) = paging::init()
-            && let Some(range) = mm::get_physical_ranges().first()
         {
-            let probe = range.start.next_multiple_of(mm::PAGE_SIZE);
-            if probe < range.end
-                && paging::translate_virtual_to_physical(root, probe) == Some(probe)
-            {
-                uart::send_byte(b'p');
-            }
+            unsafe { *KERNEL_ROOT_TABLE.get() = root };
         }
     }
 
