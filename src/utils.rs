@@ -27,3 +27,7 @@ pub(crate) fn current_hart_id() -> Option<u32> {
     }
     u32::try_from(id).ok()
 }
+
+pub const fn mb(x: usize) -> usize {
+    x * 1024 * 1024
+}

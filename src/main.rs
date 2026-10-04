@@ -1,12 +1,16 @@
 #![no_std]
 #![no_main]
+#![feature(alloc_error_handler)]
 #![feature(sync_unsafe_cell)]
+
+extern crate alloc;
 
 use core::arch::{asm, global_asm};
 use core::cell::SyncUnsafeCell;
 use core::panic::PanicInfo;
 
 mod fdt;
+mod heap;
 mod kernel_trap;
 mod mm;
 mod paging;
@@ -62,6 +66,11 @@ fn panic(_: &PanicInfo) -> ! {
     loop {}
 }
 
+#[alloc_error_handler]
+fn alloc_error(layout: core::alloc::Layout) -> ! {
+    panic!("allocation of {} bytes failed", layout.size());
+}
+
 fn main() {
     // The tables were built in machine mode. Turn them on now.
     let root = unsafe { *KERNEL_ROOT_TABLE.get() };
@@ -69,6 +78,12 @@ fn main() {
 
     if uart::found() {
         uart::send_byte(b'P');
+    }
+
+    if heap::ready() {
+        let b = alloc::boxed::Box::new(0xdead_beefu64);
+        uart::send_byte(if *b == 0xdead_beef { b'+' } else { b'-' });
+        drop(b);
     }
 
     unsafe {
@@ -135,6 +150,10 @@ pub extern "C" fn start() {
         }
 
         if mm::init().is_ok() {
+            if heap::init().is_ok() {
+                uart::send_byte(b'H');
+            }
+
             if let Ok(root) = paging::init() {
                 unsafe { *KERNEL_ROOT_TABLE.get() = root };
 

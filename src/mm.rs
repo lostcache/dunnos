@@ -301,3 +301,9 @@ fn kernel_image_range() -> (usize, usize) {
     let end_addr = (core::ptr::addr_of!(KERNEL_END) as usize).next_multiple_of(PAGE_SIZE);
     (start, end_addr)
 }
+
+pub(crate) fn mark_used(start: usize, end: usize) -> Result<(), MMError> {
+    get_mut_bitmap().set_range(start, end, true);
+    get_usable().subtract(start, end)?;
+    Ok(())
+}
