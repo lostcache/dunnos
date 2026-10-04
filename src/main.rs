@@ -134,10 +134,19 @@ pub extern "C" fn start() {
             uart::send_byte(if uart_ok && plic_ok { b'+' } else { b'-' });
         }
 
-        if mm::init().is_ok()
-            && let Ok(root) = paging::init()
-        {
-            unsafe { *KERNEL_ROOT_TABLE.get() = root };
+        if mm::init().is_ok() {
+            if let Ok(root) = paging::init() {
+                unsafe { *KERNEL_ROOT_TABLE.get() = root };
+
+                if let Some(range) = mm::get_physical_addr_ranges().first() {
+                    let probe = range.start.next_multiple_of(mm::PAGE_SIZE);
+                    if probe < range.end
+                        && paging::translate_virtual_to_physical_addr(root, probe) == Some(probe)
+                    {
+                        uart::send_byte(b'p');
+                    }
+                }
+            }
         }
     }
 
