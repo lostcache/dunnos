@@ -91,6 +91,24 @@ pub(crate) fn pop_byte() -> Option<u8> {
     Some(byte)
 }
 
+pub(crate) fn send_hex(val: usize) {
+    send_str(b"0x");
+    for shift in (0..64).rev().step_by(4) {
+        let digit = ((val >> shift) & 0xf) as u8;
+        send_byte(if digit < 10 {
+            b'0' + digit
+        } else {
+            b'a' + digit - 10
+        });
+    }
+}
+
+pub(crate) fn send_str(bytes: &[u8]) {
+    for &b in bytes {
+        send_byte(b);
+    }
+}
+
 pub(crate) fn send_byte(val: u8) {
     if !found() {
         return;

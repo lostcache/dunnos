@@ -4,6 +4,9 @@ use crate::{plic, timer_interrupt, uart};
 
 const SUPERVISOR_EXTERNAL_INTERRUPT_CODE: usize = 9;
 const TIMER_INTERRUPT: usize = 5;
+const INSTRUCTION_PAGE_FAULT: usize = 12;
+const LOAD_PAGE_FAULT: usize = 13;
+const STORE_PAGE_FAULT: usize = 15;
 
 #[unsafe(no_mangle)]
 extern "C" fn kerneltrap() {
@@ -30,9 +33,31 @@ extern "C" fn kerneltrap() {
             },
         }
     } else {
-        loop {
-            core::hint::spin_loop();
+        match code {
+            INSTRUCTION_PAGE_FAULT | LOAD_PAGE_FAULT | STORE_PAGE_FAULT => report_page_fault(cause),
+            _ => loop {
+                core::hint::spin_loop();
+            },
         }
+    }
+}
+
+fn report_page_fault(scause: usize) -> ! {
+    let stval: usize;
+    let sepc: usize;
+    unsafe {
+        asm!("csrr {0}, stval", out(reg) stval);
+        asm!("csrr {0}, sepc", out(reg) sepc);
+    }
+    uart::send_str(b"\nFAULT scause=");
+    uart::send_hex(scause);
+    uart::send_str(b" stval=");
+    uart::send_hex(stval);
+    uart::send_str(b" sepc=");
+    uart::send_hex(sepc);
+    uart::send_str(b"\n");
+    loop {
+        unsafe { asm!("wfi") }
     }
 }
 
