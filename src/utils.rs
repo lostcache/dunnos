@@ -1,10 +1,9 @@
 pub(crate) fn read_be_u32_from_addr(addr: usize) -> u32 {
-    let bytes = unsafe { core::slice::from_raw_parts(addr as *const u8, 4) };
-    u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+    u32::from_be(unsafe { core::ptr::read_unaligned(addr as *const u32) })
 }
 
 pub(crate) fn read_be_u64_from_addr(addr: usize) -> u64 {
-    ((read_be_u32_from_addr(addr) as u64) << 32) | read_be_u32_from_addr(addr + 4) as u64
+    u64::from_be(unsafe { core::ptr::read_unaligned(addr as *const u64) })
 }
 
 pub(crate) fn get_null_terminated_u8_slice<'a>(addr: usize, size: usize) -> Option<&'a [u8]> {
