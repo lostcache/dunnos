@@ -7,7 +7,7 @@ extern crate alloc;
 
 use core::arch::{asm, global_asm};
 use core::cell::SyncUnsafeCell;
-use core::panic::PanicInfo;
+use core::fmt::Write as _;
 
 mod fdt;
 mod heap;
@@ -61,42 +61,42 @@ _entry:
 "#
 );
 
-#[panic_handler]
-fn panic(_: &PanicInfo) -> ! {
-    loop {}
-}
+#[unsafe(no_mangle)]
+pub extern "C" fn start() {
+    let fdt_result = fdt::probe();
 
-#[alloc_error_handler]
-fn alloc_error(layout: core::alloc::Layout) -> ! {
-    panic!("allocation of {} bytes failed", layout.size());
-}
+    if fdt_result.is_ok() {
+        let uart_ok =
+            fdt::find_compatible_node_idx(b"ns16550a").is_some_and(|node| uart::init(node).is_ok());
+        let plic_ok = fdt::find_compatible_node_idx(b"riscv,plic0")
+            .is_some_and(|node| plic::init(node).is_ok());
 
-fn main() {
-    // The tables were built in machine mode. Turn them on now.
-    let root = unsafe { *KERNEL_ROOT_TABLE.get() };
-    paging::activate(root);
+        if uart::found() {
+            uart::send_byte(b'F');
+            uart::send_byte(if uart_ok && plic_ok { b'+' } else { b'-' });
+        }
 
-    if uart::found() {
-        uart::send_byte(b'P');
-    }
+        if mm::init().is_ok() {
+            if heap::init().is_ok() {
+                uart::send_byte(b'H');
+            }
 
-    if heap::ready() {
-        let b = alloc::boxed::Box::new(0xdead_beefu64);
-        uart::send_byte(if *b == 0xdead_beef { b'+' } else { b'-' });
-        drop(b);
-    }
+            if let Ok(root) = paging::init() {
+                unsafe { *KERNEL_ROOT_TABLE.get() = root };
 
-    unsafe {
-        asm!("csrs sstatus, {0}", in(reg) 1usize << 1); // SIE: enable interrupts in S-mode.
-    }
-    loop {
-        match uart::pop_byte() {
-            Some(byte) => uart::send_byte(byte),
-            None => unsafe {
-                asm!("wfi");
-            },
+                if let Some(range) = mm::get_physical_addr_ranges().first() {
+                    let probe = range.start.next_multiple_of(mm::PAGE_SIZE);
+                    if probe < range.end
+                        && paging::translate_virtual_to_physical_addr(root, probe) == Some(probe)
+                    {
+                        uart::send_byte(b'p');
+                    }
+                }
+            }
         }
     }
+
+    handover_to_s_mode();
 }
 
 fn handover_to_s_mode() {
@@ -134,40 +134,68 @@ fn handover_to_s_mode() {
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn start() {
-    let fdt_result = fdt::probe();
+fn main() {
+    // The tables were built in machine mode. Turn them on now.
+    let root = unsafe { *KERNEL_ROOT_TABLE.get() };
+    paging::activate(root);
 
-    if fdt_result.is_ok() {
-        let uart_ok =
-            fdt::find_compatible_node_idx(b"ns16550a").is_some_and(|node| uart::init(node).is_ok());
-        let plic_ok = fdt::find_compatible_node_idx(b"riscv,plic0")
-            .is_some_and(|node| plic::init(node).is_ok());
-
-        if uart::found() {
-            uart::send_byte(b'F');
-            uart::send_byte(if uart_ok && plic_ok { b'+' } else { b'-' });
-        }
-
-        if mm::init().is_ok() {
-            if heap::init().is_ok() {
-                uart::send_byte(b'H');
-            }
-
-            if let Ok(root) = paging::init() {
-                unsafe { *KERNEL_ROOT_TABLE.get() = root };
-
-                if let Some(range) = mm::get_physical_addr_ranges().first() {
-                    let probe = range.start.next_multiple_of(mm::PAGE_SIZE);
-                    if probe < range.end
-                        && paging::translate_virtual_to_physical_addr(root, probe) == Some(probe)
-                    {
-                        uart::send_byte(b'p');
-                    }
-                }
-            }
-        }
+    if uart::found() {
+        uart::send_byte(b'P');
     }
 
-    handover_to_s_mode();
+    if heap::ready() {
+        let b = alloc::boxed::Box::new(0xdead_beefu64);
+        uart::send_byte(if *b == 0xdead_beef { b'+' } else { b'-' });
+        drop(b);
+    }
+
+    unsafe {
+        asm!("csrs sstatus, {0}", in(reg) 1usize << 1); // SIE: enable interrupts in S-mode.
+    }
+    loop {
+        match uart::pop_byte() {
+            Some(byte) => uart::send_byte(byte),
+            None => unsafe {
+                asm!("wfi");
+            },
+        }
+    }
+}
+
+struct UartWriter;
+impl core::fmt::Write for UartWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        uart::send_str(s.as_bytes());
+        Ok(())
+    }
+}
+
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    let mut w = UartWriter;
+    let _ = writeln!(w, "\nPANIC");
+    if let Some(location) = info.location() {
+        let _ = writeln!(
+            w,
+            "at {}:{}:{}",
+            location.file(),
+            location.line(),
+            location.column()
+        );
+    }
+    let msg = info.message();
+    let _ = writeln!(w, "msg: {msg}");
+
+    // Mask supervisor interrupts, then park.
+    unsafe {
+        asm!("csrc sstatus, {0}", in(reg) 1usize << 1);
+        loop {
+            asm!("wfi");
+        }
+    }
+}
+
+#[alloc_error_handler]
+fn alloc_error(layout: core::alloc::Layout) -> ! {
+    panic!("allocation of {} bytes failed", layout.size());
 }
