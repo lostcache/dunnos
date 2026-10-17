@@ -15,6 +15,7 @@ mod kernel_trap;
 mod mm;
 mod paging;
 mod plic;
+mod task;
 mod timer_interrupt;
 mod uart;
 mod utils;
